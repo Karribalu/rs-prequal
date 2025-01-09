@@ -174,6 +174,7 @@ name = "client-1"
 version = "0.1.0"
 dependencies = [
  "prost",
+ "thiserror",
  "tokio",
  "tonic",
  "tonic-build",
@@ -469,6 +470,14 @@ checksum = "78b3ae25bc7c8c38cec158d1f2757ee79e9b3740fbc7ccf0e59e4b08d793fa89"
 [[package]]
 name = "load-balancer"
 version = "0.1.0"
+dependencies = [
+ "prost",
+ "rand",
+ "thiserror",
+ "tokio",
+ "tonic",
+ "tonic-build",
+]
 
 [[package]]
 name = "log"
@@ -781,6 +790,7 @@ name = "server-1"
 version = "0.1.0"
 dependencies = [
  "prost",
+ "thiserror",
  "tokio",
  "tonic",
  "tonic-build",
@@ -848,6 +858,26 @@ dependencies = [
  "once_cell",
  "rustix",
  "windows-sys",
+]
+
+[[package]]
+name = "thiserror"
+version = "2.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3ac7f54ca534db81081ef1c1e7f6ea8a3ef428d2fc069097c079443d24124d3"
+dependencies = [
+ "thiserror-impl",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "2.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e9465d30713b56a37ede7185763c3492a91be2f5fa68d958c44e41ab9248beb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

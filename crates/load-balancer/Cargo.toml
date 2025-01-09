@@ -6,3 +6,11 @@ edition.workspace = true
 repository.workspace = true
 
 [dependencies]
+tonic = { workspace = true }
+prost = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+rand = "0.8.5"
+
+[build-dependencies]
+tonic-build = "*"
