@@ -10,5 +10,9 @@ tonic = { workspace = true }
 prost = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }
+utils = { workspace = true }
+tracing = {workspace = true}
+tracing-subscriber = {workspace = true}
+
 [build-dependencies]
 tonic-build = "*"

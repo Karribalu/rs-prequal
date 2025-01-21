@@ -4,6 +4,7 @@ package helloworld;
 service Greeter {
   // Our SayHello rpc accepts HelloRequests and returns HelloReplies
   rpc SayHello (HelloRequest) returns (HelloReply);
+  rpc GetMetrics(Empty) returns (Metric);
 }
 message HelloRequest {
   // Request message contains the name to be greeted
@@ -14,3 +15,10 @@ message HelloReply {
   // Reply contains the greeting message
   string message = 1;
 }
+
+message Metric {
+  uint32 rif = 1;
+  uint64 latency = 2;
+}
+
+message Empty {}

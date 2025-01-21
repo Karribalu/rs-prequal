@@ -1,29 +1,59 @@
-use tonic::{transport::Server, Request, Response, Status};
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use hello_world::greeter_server::{Greeter, GreeterServer};
-use hello_world::{HelloReply, HelloRequest};
+use hello_world::{Empty, HelloReply, HelloRequest, Metric};
+use std::sync::atomic::{AtomicU32, Ordering};
+use tonic::{transport::Server, Request, Response, Status};
+use utils::measure_time;
+use utils::medianfinder::MedianFinder;
+
+
 pub mod hello_world {
     tonic::include_proto!("helloworld");
 }
 #[derive(Debug, Default)]
-pub struct MyGreeter {}
+pub struct MyGreeter {
+    pub rif: Arc<Mutex<AtomicU32>>,
+    pub latencies: Arc<Mutex<MedianFinder>>,
+}
 
 #[tonic::async_trait]
 impl Greeter for MyGreeter {
     async fn say_hello(&self, request: Request<HelloRequest>) -> Result<Response<HelloReply>, Status> {
+        self.rif.clone().lock().unwrap().fetch_add(1, Ordering::Acquire);
         println!("Got a request: {:?}", request);
-
-        let reply = HelloReply {
-            message: format!("Hello {}!", request.into_inner().name),
+        let macro_response = measure_time!({
+            let reply = HelloReply {
+                message: format!("Hello {}!", request.into_inner().name),
+            };
+            reply
+        });
+        self.rif.clone().lock().unwrap().fetch_sub(1, Ordering::Acquire);
+        self.latencies.clone().lock().unwrap().add_latency(macro_response.1.as_nanos());
+        Ok(Response::new(macro_response.0))
+    }
+    async fn get_metrics(&self, _request: Request<Empty>) -> Result<Response<Metric>, Status> {
+        println!("Got a request for metrics");
+        let rif = self.rif.lock().unwrap().load(Ordering::Acquire);
+        let latency_op = self.latencies.lock().unwrap().find_median();
+        let mut latency = 0;
+        if latency_op .is_some(){
+            latency = latency_op.unwrap();
+        }
+        let reply = Metric {
+            rif,
+            latency: latency as u64,
         };
-
         Ok(Response::new(reply))
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let addr = "[::1]:50051".parse()?;
+    let addr = "[::1]:50052".parse()?;
     let greeter = MyGreeter::default();
+    let subscriber = tracing_subscriber::FmtSubscriber::new();
+    tracing::subscriber::set_global_default(subscriber)?;
 
     Server::builder()
         .add_service(GreeterServer::new(greeter))
