@@ -1,8 +1,7 @@
-use std::rc::Rc;
-use std::sync::{Arc, Mutex};
 use hello_world::greeter_server::{Greeter, GreeterServer};
 use hello_world::{Empty, HelloReply, HelloRequest, Metric};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 use tonic::{transport::Server, Request, Response, Status};
 use utils::measure_time;
 use utils::medianfinder::MedianFinder;
@@ -24,12 +23,13 @@ impl Greeter for MyGreeter {
         println!("Got a request: {:?}", request);
         let macro_response = measure_time!({
             let reply = HelloReply {
-                message: format!("Hello {}!", request.into_inner().name),
+                message: format!("Hello {}! from server 1", request.into_inner().name),
             };
             reply
         });
         self.rif.clone().lock().unwrap().fetch_sub(1, Ordering::Acquire);
         self.latencies.clone().lock().unwrap().add_latency(macro_response.1.as_nanos());
+        tracing::info!("Time taken for processing the request is {:?}", macro_response.1);
         Ok(Response::new(macro_response.0))
     }
     async fn get_metrics(&self, _request: Request<Empty>) -> Result<Response<Metric>, Status> {
@@ -37,7 +37,7 @@ impl Greeter for MyGreeter {
         let rif = self.rif.lock().unwrap().load(Ordering::Acquire);
         let latency_op = self.latencies.lock().unwrap().find_median();
         let mut latency = 0;
-        if latency_op .is_some(){
+        if latency_op.is_some() {
             latency = latency_op.unwrap();
         }
         let reply = Metric {
