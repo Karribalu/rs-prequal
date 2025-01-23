@@ -14,5 +14,9 @@ utils = { workspace = true }
 rand = "0.8.5"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+#dotenv = { workspace = true }
+serde = { workspace = true }
+envy = { workspace = true }
+
 [build-dependencies]
 tonic-build = "*"

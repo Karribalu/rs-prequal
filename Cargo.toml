@@ -18,6 +18,9 @@ thiserror = "2.0.10"
 utils = { path = "crates/utils" }
 tracing = "0.1"
 tracing-subscriber = "0.3"
+#dotenv = "0.15.0"
+serde = { version = "1.0.217", features = ["derive"] }
+envy = "0.5.0"
 
 [workspace.build-dependencies]
 tonic-build = "*"

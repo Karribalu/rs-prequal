@@ -5,11 +5,13 @@ use hello_world::{HelloReply, HelloRequest};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{thread_rng, SeedableRng};
+use serde::Deserialize;
 use std::cmp::Ordering;
+use std::env;
 use std::fmt::{write, Debug, Display, Formatter};
 use std::future::Future;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering::SeqCst;
+use std::sync::atomic::{AtomicBool, AtomicU32};
+use std::sync::atomic::Ordering::{Acquire, Release, SeqCst};
 use std::sync::{atomic, Arc};
 use std::time::Duration;
 use thiserror::Error;
@@ -21,6 +23,12 @@ use tonic::transport::{Channel, Error};
 use tonic::{transport::Server, Code, Request, Response, Status};
 use utils::medianfinder::MedianFinder;
 
+
+#[derive(Deserialize, Debug, Default, Clone)]
+struct Config {
+    server_urls: String,
+    q_rif: u32,
+}
 const PROBE_POOL_SIZE: usize = 2;
 pub mod hello_world {
     tonic::include_proto!("helloworld");
@@ -39,12 +47,16 @@ pub struct Client {
 pub struct LoadBalancer {
     pub clients: Vec<Client>,
     pub probe_pool: Vec<Probe>,
+    pub max_rif: Arc<AtomicU32>,
+    pub config: Config,
 }
 #[derive(Debug, Default, PartialEq, Eq, Clone)]
 pub struct Probe {
     pub server: String,
     pub rif: u32,
     pub latency: u64,
+    pub times_used: u32,
+    pub normalized_rif: u32, // Used for finding the worst probe based qRIF, We cannot use float here
 }
 #[derive(Error, Debug)]
 pub enum LoadBalancerError {
@@ -97,14 +109,19 @@ impl Ord for Probe {
     }
 }
 impl LoadBalancer {
-    pub fn new() -> Self {
+    pub fn new(config: Config) -> Self {
         Self {
             clients: vec![],
             probe_pool: vec![],
+            max_rif: Arc::new(AtomicU32::new(0)),
+            config,
         }
     }
+    pub fn is_probe_hot(&self, probe: &Probe) -> bool {
+        probe.normalized_rif >= self.config.q_rif
+    }
     /**
-
+    Takes a server address starting with http or https and adds in the clients
     */
     pub async fn add_client(&mut self, addr: String) -> Result<(), LoadBalancerError> {
         if let client = GreeterClient::connect(addr.clone()).await {
@@ -145,10 +162,29 @@ impl LoadBalancer {
     This function has to determine the best server to chose from the existing probe bool
     */
     pub fn get_server(&mut self) -> Result<&mut GreeterClient<Channel>, LoadBalancerError> {
-        // TODO: Implement the efficient server selection from the probe pool
-        let first_probe = &self.probe_pool[0].server;
+        let cold_servers = self.probe_pool.iter()
+            .filter(|item| !self.is_probe_hot(*item))
+            .collect::<Vec<&Probe>>();
+        let mut best_probe = &self.probe_pool[0];
+        if cold_servers.is_empty() {
+            // All servers are hot find the one with less RIF
+            for i in 1..self.probe_pool.len() {
+                if self.probe_pool[i].rif < best_probe.rif {
+                    best_probe = &self.probe_pool[i];
+                }
+            }
+        } else {
+            // find the one with less latency
+            for i in 1..self.probe_pool.len() {
+                if self.probe_pool[i].latency < best_probe.latency {
+                    best_probe = &self.probe_pool[i];
+                }
+            }
+        }
+        // // TODO: Implement the efficient server selection from the probe pool
+        // let first_probe = &self.probe_pool[0].server;
         for client in &mut self.clients {
-            if client.client_add.eq(first_probe) && client.is_active.load(SeqCst) {
+            if client.client_add.eq(&best_probe.server) && client.is_active.load(SeqCst) {
                 return Ok(&mut client.client);
             }
         }
@@ -172,15 +208,29 @@ impl LoadBalancer {
                 match response {
                     Ok(metric) => {
                         let inner = metric.into_inner();
+                        if inner.rif > self.max_rif.load(Acquire) {
+                            self.max_rif.store(inner.rif, Release);
+
+                            // When max_rif changes all the probes normalization should change
+                            self.probe_pool = self.probe_pool.iter().map(|item| {
+                                let mut new_probe = item.clone();
+                                new_probe.normalized_rif = item.rif / &self.max_rif.load(Acquire);
+                                new_probe
+                            }).collect::<Vec<Probe>>();
+                        }
                         // Deletes the existing probe if any for this server
                         self.probe_pool.retain(|x| !x.server.eq(&server.client_add));
+
+                        let normalized_rif = ((inner.rif as f32 / self.max_rif.load(Acquire) as f32) * 10_f32) as u32;
 
                         self.probe_pool.push(Probe {
                             server: server.client_add.clone(),
                             rif: inner.rif,
                             latency: inner.latency,
+                            times_used: 0,
+                            normalized_rif,
                         });
-                        self.probe_pool.sort();
+                        // self.probe_pool.sort();
                         tracing::info!("pool after sorting {:?}", self.probe_pool);
                         tracing::info! {
                             %inner,
@@ -241,6 +291,7 @@ impl Greeter for MyGreeter {
     }
     /**
     This function should return the RIF and the median of latencies
+    We won't be using this anywhere!
     */
     async fn get_metrics(&self, _request: Request<Empty>) -> Result<Response<Metric>, Status> {
         // Create a longer-lived binding for the cloned Arc
@@ -266,12 +317,16 @@ impl Greeter for MyGreeter {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+
+    let config = envy::from_env::<Config>().expect("Environment config must be set");
     let addr = "[::1]:50051".parse()?;
     let mut greeter = MyGreeter::default();
     let subscriber = tracing_subscriber::FmtSubscriber::new();
     tracing::subscriber::set_global_default(subscriber)?;
-    let load_balancer = Arc::new(Mutex::new(LoadBalancer::default()));
-    initialise_load_balancer(load_balancer.clone()).await;
+    let load_balancer = Arc::new(Mutex::new(LoadBalancer::new(config.clone())));
+    tracing::info!("starting the load balancer with initial config {:?}", &config);
+    let server_urls = config.server_urls.split(",").map(|item| item.to_string()).collect::<Vec<String>>();
+    initialise_load_balancer(load_balancer.clone(), server_urls).await;
     let (mut shutdown_tx, shutdown_rx) = oneshot::channel();
     let background_task = task::spawn(background_process(shutdown_rx, load_balancer.clone()));
     greeter.load_balancer = load_balancer;
@@ -292,17 +347,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 This function takes care of initialising the clients defined the config
 TODO: Add more servers
 */
-async fn initialise_load_balancer(balancer: Arc<Mutex<LoadBalancer>>) {
-    let servers = vec![
-        String::from("http://[::1]:50052"),
-        String::from("http://[::1]:50053"),
-        String::from("http://[::1]:50054"),
-    ];
-    for server in &servers {
+async fn initialise_load_balancer(balancer: Arc<Mutex<LoadBalancer>>, server_urls: Vec<String>) {
+    for server in &server_urls {
         let res = balancer.lock().await.add_client(server.clone()).await;
         match res {
             Ok(_) => {
-                tracing::info!("Added the client {:?}", res);
+                tracing::info!("Added the client {:?}", server);
             }
             Err(error) => {
                 tracing::info!(
@@ -322,22 +372,22 @@ async fn background_process<'a>(
     mut shutdown_signal: oneshot::Receiver<()>,
     mut load_balancer: Arc<Mutex<LoadBalancer>>,
 ) {
-    let mut interval = interval(Duration::from_secs(5));
+    let mut interval = interval(Duration::from_millis(10));
 
     loop {
         tokio::select! {
             _ = interval.tick() => {
                 // Perform some background work
-                println!("Background task is running...");
+                println!("Probing the servers...");
                 let mut balancer = load_balancer.lock().await;
-                for server in &balancer.clients{
-                    if !&server.is_active.load(atomic::Ordering::Acquire) {
+                for server in &balancer.clients {
+                    if !&server.is_active.load(Acquire) {
                         tracing::info!("An inactive server is found, Trying to reconnect");
                         // Try to connect and update the is_active if successful
                          if let client = GreeterClient::connect(server.client_add.to_string()).await {
                             match client {
                                 Ok(client) => {
-                                    server.is_active.clone().store(true, atomic::Ordering::Release);
+                                    server.is_active.clone().store(true, Release);
                                 }
                                 Err(error) => {
                                     tracing::error!("Unable to contact the server while ticking {:?}", server);
