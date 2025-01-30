@@ -11,6 +11,6 @@ tonic = { workspace = true }
 prost = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }
-
+regex = "1.11.1"
 [build-dependencies]
 tonic-build = "*"

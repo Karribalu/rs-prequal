@@ -11,12 +11,17 @@ prost = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 utils = { workspace = true }
-rand = "0.8.5"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-#dotenv = { workspace = true }
+dotenv = { workspace = true }
 serde = { workspace = true }
 envy = { workspace = true }
+rand = { workspace = true }
+hyper = { version = "1.5.2", features = ["full"] }
+axum = "0.7"
+hyper-util = { version = "0.1.10", features = ["full"] }
+http = "0.2"
+
 
 [build-dependencies]
 tonic-build = "*"
